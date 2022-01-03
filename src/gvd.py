@@ -86,12 +86,13 @@ def parse(s, filepath=None, filename=None):
     if msg == True:
         tr = []
         ss = 0
+        negoff = None
         for e in root.iter('CZPTTLocation'):
             ss += 1
             loc = e.find('Location')
-            iso = loc.find('CountryCodeISO').text
-            if iso != 'CZ':
-                continue
+            iso = loc.find('CountryCodeISO').text.replace('CZ','54').replace('SK','56')
+            #if iso != 'CZ':
+            #    continue
             stop_id = loc.find('LocationPrimaryCode').text
             stop_name = loc.find('PrimaryLocationName').text
             ALA = ppa = ALD = ppd = None
@@ -101,13 +102,14 @@ def parse(s, filepath=None, filename=None):
                 if tqc == 'ALA':
                     ALA = atime = t.find('Time').text[:8]
                     ppa = t.find('Offset').text
-                    if ppa != '0':
-                        atime = ofs(atime, ppa)
+                    atime = ofs(atime, ppa, negoff)
                 elif tqc == 'ALD':
                     ALD = dtime = t.find('Time').text[:8]
                     ppd = t.find('Offset').text
-                    if ppd != '0':
-                        dtime = ofs(dtime, ppd)
+                    if negoff == None:
+                        negoff = int(ppd)
+                    dtime = ofs(dtime, ppd, negoff)
+                        
                         
             otn = tt = ctt = psn = None
             tat = set()
@@ -166,7 +168,10 @@ def parse(s, filepath=None, filename=None):
         for e in root.findall('NetworkSpecificParameter'):
             name = e.find('Name').text
             value = e.find('Value').text
-            dbi("nspec","trip_id,name,value", [tid, name, value])
+            kod = None
+            if name =='CZCentralPTTNote':
+                kod = value.split('|')[0]
+            dbi("nspec","trip_id,name,value,kod", [tid, name, value, kod])
             if name == 'CZTrainName':
                 tname = value
             elif name == 'CZReroute':
@@ -193,8 +198,8 @@ def parse(s, filepath=None, filename=None):
                     tname2 = ''
             tln = ' /'.join(l)
             tsn = min( map(int, s) )
-        val = [tid, PAID, PAv, TRID, TRv, RPAID, RPAv, year, company,cdate,sdate,edate,reroute, hexmap,filepath,filename,tname,tsn,tln,'-'.join(lin),'_'.join(otns),rsc,ldate,bitmap]
-        dbi("trips","trip_id,PAID,PAv,TRID,TRv,RPAID,RPAv,year,company,cdate,sdate,edate,reroute,hexmap,filepath,filename,tname,tsn,tln,psn,otns,rsc,ldate,bitmap", val)
+        val = [tid, PAID, PAv, TRID, TRv, RPAID, RPAv, year, company,cdate,sdate,edate,reroute, hexmap,filepath,filename,tname,tsn,tln,'-'.join(lin),'_'.join(otns),rsc,ldate,negoff,bitmap]
+        dbi("trips","trip_id,PAID,PAv,TRID,TRv,RPAID,RPAv,year,company,cdate,sdate,edate,reroute,hexmap,filepath,filename,tname,tsn,tln,psn,otns,rsc,ldate,negoff,bitmap", val)
     elif can == True:
         val = [tid,PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate]
         dbi('cancel', 'trip_id,PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate', val)
@@ -220,7 +225,7 @@ def getcal(m):
         return r
 
 def calcal():
-    sql = "SELECT id,trip_id,PAID,service_id,hexmap,sdate,edate,cdate FROM trips WHERE service_id < 0 OR service_id IS NULL ORDER BY cdate ASC"
+    sql = "SELECT id,trip_id,PAID,service_id,hexmap,sdate,edate,cdate,negoff FROM trips WHERE service_id < 0 OR service_id IS NULL ORDER BY cdate ASC"
     #print(sql)
     cur = db.execute(sql)
     for row in cur:
@@ -228,7 +233,7 @@ def calcal():
         sid = row[3]
         if sid == None:
             sid = getcal( int( row[4], 0 ) )
-            dbi('jr_zmeny','trip_id,typ,calid,sdate,edate,ldate,cisdate',[ row[1], 'a', sid, row[5], row[6], datetime.datetime.now().isoformat(), row[7] ])
+            dbi('jr_zmeny','trip_id,typ,calid,sdate,edate,ldate,cisdate',[ row[1], 'a', sid, row[5], row[6], datetime.datetime.now().isoformat(), row[7] ], oi='OR IGNORE')
         sql2 = "SELECT trip_id,PAID,'e',sdate,edate,cdate,hexmap FROM trips WHERE RPAID = '"+row[2]+"' UNION ALL SELECT trip_id,PAID,'c',sdate,edate,cdate,hexmap FROM cancel WHERE PAID = '"+row[2]+"' ORDER BY cdate ASC"
         c2 = db.execute(sql2)
         bm = int(row[4], 0)
@@ -239,10 +244,13 @@ def calcal():
             nsid = getcal(bm)
             if sid != nsid:
                 print('cc\t', sid, ' > ', nsid)
-                dbi('jr_zmeny','trip_id, from_id, typ, ocalid, calid, sdate, edate, ldate, cisdate',[ row[1], r2[0], r2[2],sid, nsid, r2[3], r2[4],datetime.datetime.now().isoformat(), r2[5] ])
+                dbi('jr_zmeny','trip_id, from_id, typ, ocalid, calid, sdate, edate, ldate, cisdate',[ row[1], r2[0], r2[2],sid, nsid, r2[3], r2[4],datetime.datetime.now().isoformat(), r2[5] ], oi='OR IGNORE')
                 sid = nsid
         if row[3] == None or abs(row[3]) != sid:
-            sql = "UPDATE trips SET service_id = '"+str(sid)+"' WHERE id = '"+str(row[0])+"'"
+            gsid = sid
+            if row[8] != 0:
+                gsid = getcal( bm << abs(row[0]) )
+            sql = "UPDATE trips SET service_id = '"+str(gsid)+"', gvdcal = '"+str(sid)+"' WHERE id = '"+str(row[0])+"'"
             #print(sql)
             db.execute(sql)
     db.commit()
@@ -323,8 +331,6 @@ def pp_route():
                 #print(r2)
                 routes[ '#'.join(r2[1:]) ] = r2[0]
                 ids.add(r2[0])
-            #ids = set(routes.values())
-            #print(routes)
 
         m2 = '#'.join(row[:3])
         print(m2)
@@ -335,11 +341,7 @@ def pp_route():
                 ks = row[4]+'-'+chr(id)
                 print(ks)
                 id += 1
-            l2 = ''
-            #if row[3] in linky:
-            #    print(linky[row[3]])
-                #l2 = ' ('+linky[row[3]]+')'
-            dbi('routes',"route_id,agency_id,route_short_name,route_long_name",[ks,row[0], row[1], row[2]+l2 ])
+            dbi('routes',"route_id,agency_id,route_short_name,route_long_name",[ks,row[0], row[1], row[2] ])
             routes[m2] = ks
             ids.add(ks)
         db.execute("UPDATE trips SET route_id = '"+routes[m2]+"' WHERE trip_id = '"+row[5]+"'")
@@ -350,30 +352,31 @@ def pp():
     print(sql)
     db.execute(sql)
     
-    sql = "INSERT OR IGNORE INTO stops (stop_id,stop_name) SELECT DISTINCT stop_id,stop_name FROM stop_times"
+    #sql = "INSERT OR IGNORE INTO stops (stop_id,stop_name) SELECT DISTINCT stop_id,stop_name FROM stop_times WHERE pickup_type != '1' AND drop_off_type != '1'"
+    #print(sql)
+    #db.execute(sql)
+    
+    sql = "SELECT stop_id,stop_name FROM stop_times WHERE stop_id NOT IN(SELECT stop_id FROM stops WHERE stop_name IS NOT NULL) AND pickup_type != 1 GROUP BY stop_id"
     print(sql)
-    db.execute(sql)
-    c = 0
-    sql = "SELECT DISTINCT stop_id,stop_name FROM stop_times WHERE stop_id IN(SELECT stop_id FROM stops WHERE stop_name IS NULL)"
     cur = setup.db.execute(sql)
     for row in cur:
-        print(c,row)
-        sql = "UPDATE stops SET stop_name = '"+row[1]+"' WHERE stop_id = '"+row[0]+"'"
+        print(row)
+        sql = "INSERT INTO stops (stop_id, stop_name) VALUES('"+row[0]+"','"+row[1]+"') ON CONFLICT (stop_id) DO UPDATE SET stop_name = '"+row[1]+"' WHERE stop_id = '"+row[0]+"'"
         setup.db.execute(sql)
-        c += 1
+        
     pp_route()
-    
     setup.db.commit()
 
-
-def ofs(t, o):
+def ofs(t, o, negoff):
     #print(t, o)
-    return str(int(t[:2])+(int(o)*24))+t[2:]
+    if negoff == 0 and o == '0':
+        return t
+    return str(int(t[:2])+( (abs(negoff)+int(o))*24))+t[2:]
 
-def dbi(table, name, val):
+def dbi(table, name, val, oi=''):
     #print(val)
     v = "','".join( map(str, val) ).replace("'None'","NULL")
-    sql = "INSERT INTO "+table+" ("+name+") VALUES('"+v+"')"
+    sql = "INSERT "+ oi +" INTO "+table+" ("+name+") VALUES('"+v+"')"
     #print(sql)
     db.execute(sql)
     
@@ -391,15 +394,17 @@ def gctt(s):
     else:
         return s
 
-t1 = time.time()
-
-setup.init()
-update()
-calcal()
-hex2gtfs()
-pp()
-
-print('cas', time.time() - t1)
+if __name__ == '__main__':
+    
+    t1 = time.time()
+    
+    setup.init()
+    update()
+    calcal()
+    hex2gtfs()
+    pp()
+    
+    print('cas', time.time() - t1)
 
 
 

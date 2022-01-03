@@ -7,6 +7,7 @@ import os
 import csv
 import re
 import xml.etree.ElementTree as ET 
+import pathlib
 
 setup.init()
 
@@ -17,16 +18,24 @@ def wgs(s):
     print(deg, minutes, seconds, direction)
     return str(round((float(deg) + float(minutes)/60 + float(seconds)/(60*60)) ,5))
 
-fp = '../res/sr70.csv'
-if os.path.exists(fp):
-    fi = os.lstat(fp)
-    sql = "SELECT date,size FROM 'files' WHERE filename = 'sr70.csv' ORDER BY rowid DESC LIMIT 1"
-    row = db.execute(sql).fetchone()
-    if row == None or fi.st_ctime > row[0] or fi.st_size != row[1]:
+def filech(fp):
+    p = pathlib.Path(fp)
+    if os.path.exists(fp):
+        fi = os.lstat(fp)
+        sql = "SELECT date,size FROM 'files' WHERE filename = '"+p.name+"' ORDER BY rowid DESC LIMIT 1"
+        row = db.execute(sql).fetchone()
+        if row == None or fi.st_ctime > row[0] or fi.st_size != row[1]:
+            return True
+    else:
+        return False
+
+def sr70():
+    fp = '../res/sr70.csv'
+    if filech(fp):
         c = csv.DictReader(open(fp))
         for row in c:
             #print(row)
-            sid = 'CZ'+(row['SR70'][:-1].zfill(5))
+            sid = '54'+(row['SR70'][:-1].zfill(5))
             tn = row['Tarifní název']
             x = y = ''
             try:
@@ -40,6 +49,7 @@ if os.path.exists(fp):
             sql = "INSERT INTO stops (stop_id,tar_nazev,stop_lat,stop_lon) VALUES('"+val2+"') ON CONFLICT (stop_id) DO UPDATE SET tar_nazev = '"+tn+"', stop_lat='"+y+"', stop_lon = '"+x+"'"
             db.execute(sql)
             #print(sql)
+        fi = os.lstat(fp)
         db.execute("INSERT INTO files (filename,size,date) VALUES('sr70.csv','"+str(fi.st_size)+"','"+str(fi.st_ctime)+"')")
         db.commit()
     
@@ -73,5 +83,57 @@ def ag():
                     print(sql)
                     db.execute(sql)
 
+def kadr(name, elem, hdr, kadr = 'kadr'):
+    print('kadr', name, elem, hdr)
+    fp = '../res/'+name+'.xml'
+    if os.path.exists(fp):
+        h = hdr.split(',')
+        root = ET.parse(fp).getroot()
+        for e in root.findall('.//{http://provoz.szdc.cz/'+kadr+'}'+elem):
+            print(e.attrib)
+            l = []
+            for i in h:
+                if i in e.attrib:
+                    l.append(e.attrib[i])
+                else:
+                    l.append('')
+            #print(l)
+            val = "','".join(l)
+            sql = "INSERT OR IGNORE INTO "+elem+" ("+ hdr + ") VALUES('"+val+"')"
+            #print(sql)
+            db.execute(sql)
+
+def sadd():
+    d = {}
+    sa = '../res/stop_add.csv'
+    if os.path.exists(sa):
+        c = csv.reader( open(sa, 'r') )
+        for row in c:
+            d[ row[0]] = row
+            if len(row[2]) > 2:
+                sql = "UPDATE stops SET stop_lat='"+row[2]+"', stop_lon='"+row[3]+"' WHERE stop_id='"+row[0]+"'"
+                print(sql)
+                db.execute(sql)
+        db.commit() 
+    
+    
+    cur = db.execute("SELECT stop_id,stop_name,stop_lat,stop_lon FROM stops WHERE stop_name IS NOT NULL AND stop_lat IS NULL ORDER BY stop_id")
+    for row in cur:
+        if row[0] not in d:
+            d[row[0]] = row
+    
+    fp = open(sa,'w')
+    cw = csv.writer(fp)
+    for k in sorted(d):
+        cw.writerow(d[k])
+
 ag()
+sr70()
+sadd()
+db.commit()
+
+kadr('SeznamPoznamkyKJR', 'PoznamkyKJR','Kod,Nazev')
+kadr('SeznamIDS', 'IDS', 'Kod,Zkratka,Nazev,Poznamka')
+kadr('SeznamLinky', 'Linky', 'Kod,Zkratka,Znacka,Nazev', kadr='kadrNamespace')
+
 db.commit()
