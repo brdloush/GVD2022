@@ -22,7 +22,6 @@ fptr.write('route_id,service_id,trip_id\r\n')
 fpst = open( os.path.join(dir, 'stop_times.txt'), 'w' )
 fpst.write(sthdr+'\r\n')
 
-sql = "SELECT route_id,service_id,trip_id FROM trips WHERE service_id > 0 AND rsc > 1 AND trip_id = 'KT----13847A_00_2022' ORDER BY cdate ASC"
 sql = "SELECT route_id,service_id,trip_id FROM trips WHERE service_id > 0 AND rsc > 1 ORDER BY cdate ASC"
 cur = db.execute(sql)
 
@@ -51,9 +50,9 @@ def cp(tbl,hdr,sid,sind,rtrn=0,end=''):
     for row in cur:
         if row[sind] in sid:
             r.add(row[rtrn])
-            val = '","'.join( map(str,row) ).replace('"None"', '""')
+            val = ('"'+('","'.join( map(str,row) )) +'"').replace('"None"', '""')
             print(val)
-            fp.write('"'+val+'"\r\n')
+            fp.write(''+val+'\r\n')
     fp.close()
     return r
 

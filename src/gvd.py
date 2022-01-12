@@ -129,6 +129,8 @@ def parse(s, filepath=None, filename=None):
             if 'CZ01' in tat: # at si zavolaji :)
                 pt = 2
                 dot = 2
+                if stop_id == '34273': # Ostrava-Zábřeh, v provozu od 05/2023
+                    pt = 1; dot = 1
             if atime == None:
                 atime = dtime
             if dtime == None:
@@ -249,7 +251,7 @@ def calcal():
         if row[3] == None or abs(row[3]) != sid:
             gsid = sid
             if row[8] != 0:
-                gsid = getcal( bm << abs(row[0]) )
+                gsid = getcal( bm << abs(row[8]) )
             sql = "UPDATE trips SET service_id = '"+str(gsid)+"', gvdcal = '"+str(sid)+"' WHERE id = '"+str(row[0])+"'"
             #print(sql)
             db.execute(sql)
