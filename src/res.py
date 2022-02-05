@@ -32,7 +32,7 @@ def filech(fp):
 def sr70():
     fp = '../res/sr70.csv'
     if filech(fp):
-        c = csv.DictReader(open(fp))
+        c = csv.DictReader(open(fp, 'r', encoding='utf-8'))
         for row in c:
             #print(row)
             sid = '54'+(row['SR70'][:-1].zfill(5))
@@ -84,9 +84,9 @@ def ag():
                     db.execute(sql)
 
 def kadr(name, elem, hdr, kadr = 'kadr'):
-    print('kadr', name, elem, hdr)
+    #print('kadr', name, elem, hdr)
     fp = '../res/'+name+'.xml'
-    if os.path.exists(fp):
+    if filech(fp):
         h = hdr.split(',')
         root = ET.parse(fp).getroot()
         for e in root.findall('.//{http://provoz.szdc.cz/'+kadr+'}'+elem):
@@ -102,30 +102,51 @@ def kadr(name, elem, hdr, kadr = 'kadr'):
             sql = "INSERT OR IGNORE INTO "+elem+" ("+ hdr + ") VALUES('"+val+"')"
             #print(sql)
             db.execute(sql)
+            
+        fi = os.lstat(fp)
+        db.execute("INSERT INTO files (filename,size,date) VALUES('"+name+".xml','"+str(fi.st_size)+"','"+str(fi.st_ctime)+"')")
+        db.commit()
 
 def sadd():
     d = {}
     sa = '../res/stop_add.csv'
-    if os.path.exists(sa):
-        c = csv.reader( open(sa, 'r') )
+    if os.path.exists(sa) and filech(sa):
+        fp = open(sa, 'r')
+        c = csv.reader( fp )
         for row in c:
             d[ row[0]] = row
             if len(row[2]) > 2:
                 sql = "UPDATE stops SET stop_lat='"+row[2]+"', stop_lon='"+row[3]+"' WHERE stop_id='"+row[0]+"'"
                 print(sql)
                 db.execute(sql)
-        db.commit() 
+        db.commit()
+        fp.close()
     
-    
-    cur = db.execute("SELECT stop_id,stop_name,stop_lat,stop_lon FROM stops WHERE stop_name IS NOT NULL AND stop_lat IS NULL ORDER BY stop_id")
-    for row in cur:
-        if row[0] not in d:
-            d[row[0]] = row
-    
-    fp = open(sa,'w')
-    cw = csv.writer(fp)
-    for k in sorted(d):
-        cw.writerow(d[k])
+        cur = db.execute("SELECT DISTINCT st.stop_id,stop_name FROM stop_times AS st INNER JOIN stops AS s ON st.stop_id = s.stop_id  WHERE st.stop_id IN(SELECT stop_id FROM stops WHERE stop_lat IS NULL) AND pickup_type != '1'")
+        #for row in cur:
+            #print(row)
+            #a = 1
+        
+        #cur = db.execute("SELECT stop_id,stop_name,stop_lat,stop_lon FROM stops WHERE stop_name IS NOT NULL AND stop_lat IS NULL ORDER BY stop_id")
+        e = False
+        for row in cur:
+            if row[0] not in d:
+                d[row[0]] = row
+                e = True
+        
+        if True == True:
+            print('d', d)
+            fp = open(sa,'w')
+            cw = csv.writer(fp)
+            for k in sorted(d.keys()):
+                cw.writerow(d[k])
+            fp.close()
+            
+            fi = os.lstat(sa)
+            db.execute("INSERT INTO files (filename,size,date) VALUES('stop_add.csv','"+str(fi.st_size)+"','"+str(fi.st_ctime)+"')")
+            db.commit()
+            print(fi)
+        print(e)
 
 ag()
 sr70()

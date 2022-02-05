@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*
+# -*- coding: utf-8 
 
 import setup
 from setup import db
@@ -25,21 +25,24 @@ def update(path=None):
             update(f)
         else:
             if f not in fl:
+                st = os.stat(pp)
                 if pp.endswith('.xml.zip'):
-                    parse(gzip.open(pp).read(), path, f)
-                    db.execute("INSERT INTO files (filename) VALUES('"+f+"')")
+                    parse(gzip.open(pp).read(), path, f, st.st_mtime)
+                    db.execute("INSERT INTO files (filepath,filename,date) VALUES('"+path+"','"+f+"','"+str(st.st_mtime)+"')")
                     #break #test stop:)
                     #if f[:2] == 'PA':
                     #    break;
                 else:
                     zf = zipfile.ZipFile(pp)
                     for e in zf.namelist():
-                        parse( zf.read(e), f, e)
+                        t = zf.getinfo(e).date_time
+                        mt = datetime.datetime( t[0],t[1],t[2],t[3],t[4],t[5] )
+                        parse( zf.read(e), f, e, mt.timestamp())
                         #break
-                    db.execute("INSERT INTO files (filename) VALUES('"+f+"')")
+                    db.execute("INSERT INTO files (filename,date) VALUES('"+f+"','"+str(st.st_mtime)+"')")
     db.commit()
 
-def parse(s, filepath=None, filename=None):
+def parse(s, filepath=None, filename=None, mtime=None):
     root = ET.fromstring(s)
     msg = can = False
     if root.tag == 'CZPTTCISMessage':
@@ -56,8 +59,7 @@ def parse(s, filepath=None, filename=None):
             TRID = e.find('Core').text
             TRv = e.find('Variant').text
             company = e.find('Company').text
-    tid = '_'.join( [PAID, PAv, year] )
-    ldate = datetime.datetime.now().isoformat()
+    ldate = datetime.datetime.now().isoformat('T', 'seconds')
     RPAID = RPAv = None
     if msg == True:
         for e in root.iter('RelatedPlannedTransportIdentifiers'):
@@ -81,56 +83,38 @@ def parse(s, filepath=None, filename=None):
     edate = vp.find('EndDateTime').text[:10]
     hexmap = hex(int(bitmap, 2) << ( setup.yend.toordinal() - datetime.datetime.fromisoformat(edate).toordinal() ) )
     
-    print(tid, filename)
-    
     if msg == True:
-        tr = []
-        ss = 0
+        val =  [PAID, PAv, TRID, TRv, RPAID, RPAv,year,company,cdate,sdate,edate,filepath,filename,ldate,mtime,hexmap] 
+        tid = dbi('trips', 'PAID,PAv,TRID,TRv,RPAID,RPAv,year,company,cdate,sdate,edate,filepath,filename,ldate,mtime,hexmap', val).lastrowid
+        db.execute("INSERT OR IGNORE INTO agency (agency_id) VALUES('"+company+"')")
+        print(tid, filepath, filename)
         negoff = None
+        otns = []
+        otnsx = set()
+        tr = []
+        ss = rsc = 0
         for e in root.iter('CZPTTLocation'):
             ss += 1
             loc = e.find('Location')
-            iso = loc.find('CountryCodeISO').text.replace('CZ','54').replace('SK','56')
-            #if iso != 'CZ':
-            #    continue
+            #iso = loc.find('CountryCodeISO').text.replace('CZ','54').replace('SK','56')
+            iso = loc.find('CountryCodeISO').text
+            iso = diso[iso]
             stop_id = loc.find('LocationPrimaryCode').text
             stop_name = loc.find('PrimaryLocationName').text
-            ALA = ppa = ALD = ppd = None
             atime = dtime = None
             for t in e.iter('Timing'):
                 tqc = t.get('TimingQualifierCode')
                 if tqc == 'ALA':
-                    ALA = atime = t.find('Time').text[:8]
-                    ppa = t.find('Offset').text
-                    atime = ofs(atime, ppa, negoff)
+                    atime = ofs(t, negoff)
                 elif tqc == 'ALD':
-                    ALD = dtime = t.find('Time').text[:8]
-                    ppd = t.find('Offset').text
                     if negoff == None:
-                        negoff = int(ppd)
-                    dtime = ofs(dtime, ppd, negoff)
-                        
-                        
-            otn = tt = ctt = psn = None
+                        negoff = int( (t.find('Offset').text) )
+                    dtime = ofs(t, negoff)  
             tat = set()
-            lin = set()
-            pt = dot = 1    
+            pt = dot = 1
+            tt = ctt = ptt = psn = nd = None
             for t in e.iter('TrainActivityType'):
                 tat.add( t.text )
-            if '0001' in tat:
-                pt = 0; dot = 0
-            if '0030' in tat:
-                pt = 3
-                dot = 3
-            if '0028' in tat:
-                dot = 1
-            if '0029' in tat:
-                pt = 1
-            if 'CZ01' in tat: # at si zavolaji :)
-                pt = 2
-                dot = 2
-                if stop_id == '34273': # Ostrava-Zábřeh, v provozu od 05/2023
-                    pt = 1; dot = 1
             if atime == None:
                 atime = dtime
             if dtime == None:
@@ -141,31 +125,45 @@ def parse(s, filepath=None, filename=None):
                 atime = dtime
             x = e.find('TrafficType')
             if x != None:
-                tt = x.text
+                ptt = tt
+                tt = gctt(x.text)
             x = e.find('CommercialTrafficType')
             if x != None:
-                ctt = x.text            
+                ctt = gctt(x.text)            
             x = e.find('OperationalTrainNumber')
             if x != None:
                 otn = x.text
-            ttt = gctt(tt)
-            cttt = gctt(ctt)
-            if pt != 1 and dot != 1:
-                tr.append( [otn, ttt, cttt] )
-            nd = obj = ''  
+                otnsx.add(otn)
+            if tt != 'C4' or ptt != 'C4':
+                if '0001' in tat:
+                    pt = 0; dot = 0
+                if '0030' in tat:
+                    pt = 3
+                    dot = 3
+                if '0028' in tat:
+                    dot = 1
+                if '0029' in tat:
+                    pt = 1
+                if 'CZ01' in tat: # at si zavolaji :)
+                    pt = 2
+                    dot = 2
+                    if stop_id == '34273': # Ostrava-Zábřeh, v provozu od 05/2023
+                        pt = 1; dot = 1
+                if pt != 1 and dot != 1:
+                    rsc += 1
+                    if otn not in otns and tt != 'C4':
+                        otns.append(otn)
+                        tr.append((ctt if ctt else tt)+' '+otn)
             for p in e.findall('NetworkSpecificParameter'):
                 n = p.find('Name').text
                 v = p.find('Value').text
-                if n == 'CZAlternativeTransport':
-                    nd = v
-                elif n == 'CZPassengerPublicTransportOrderingCoName':
-                    obj = v
-                elif n == 'CZPassengerServiceNumber':
+                if n == 'CZPassengerServiceNumber':
                     psn = v
-                    lin.add(v)
-                
-            dbi( 'stop_times', 'trip_id,arrival_time,departure_time,stop_id,stop_name,ALA,ppa,ALD,ppd,pickup_type,drop_off_type,otn,tat,tt,ctt,psn,stop_sequence,obj,nd', [ tid, atime, dtime, iso+stop_id, stop_name, ALA, ppa, ALD, ppd, pt, dot, otn, '-'.join(tat), ttt, cttt,psn,ss,obj,nd ] )
-            
+                elif n == 'CZAlternativeTransport':
+                    nd = v
+            val = [tid,atime,dtime,iso+stop_id,pt,dot,ss,tt,ctt,otn,psn,'-'.join(tat),nd]
+            dbi('stop_times','trip_id,arrival_time,departure_time,stop_id,pickup_type,drop_off_type,stop_sequence,tt,ctt,otn,psn,tat,nd',val)
+            db.execute("INSERT OR IGNORE INTO stops(stop_id,stop_name) VALUES("+iso+stop_id+",'"+stop_name+"')")
         tname = reroute = None
         for e in root.findall('NetworkSpecificParameter'):
             name = e.find('Name').text
@@ -178,34 +176,67 @@ def parse(s, filepath=None, filename=None):
                 tname = value
             elif name == 'CZReroute':
                 reroute = value
-        rsc = len(tr)
-        tsn = ''
-        tln = ''
-        otns = []
-        if rsc > 1:
-            tr.pop(rsc-1)
-            s = set()
-            l = []
-            if tname == None:
-                tname2 = ''
-            else:
-                tname2 = ' '+tname
-            for r in tr:
-                if r[0] not in s:
-                    s.add(r[0])
-                    if r[2] == None:
-                        r[2] = r[1]
-                    l.append( r[2]+' '+r[0] + tname2 )
-                    otns.append(r[0])
-                    tname2 = ''
-            tln = ' /'.join(l)
-            tsn = min( map(int, s) )
-        val = [tid, PAID, PAv, TRID, TRv, RPAID, RPAv, year, company,cdate,sdate,edate,reroute, hexmap,filepath,filename,tname,tsn,tln,'-'.join(lin),'_'.join(otns),rsc,ldate,negoff,bitmap]
-        dbi("trips","trip_id,PAID,PAv,TRID,TRv,RPAID,RPAv,year,company,cdate,sdate,edate,reroute,hexmap,filepath,filename,tname,tsn,tln,psn,otns,rsc,ldate,negoff,bitmap", val)
+        if len(tr) > 0 and tname != None:
+            tr[0] = tr[0] + ' ' + tname
+        if len(otns) == 0:
+            otns.append(otn)
+        tln = ' /'.join(tr)
+        rid = grid(company,min(otns), tln )
+
+        us = set()
+        if len(otns) > 0:
+            us.add("tsn='"+min(otns)+"'")
+        us.add( "tln='"+tln+"'" )
+        us.add( "rsc='"+str(rsc)+"'" )
+        if reroute != None:
+            us.add( "reroute='"+reroute+"'" )
+        us.add("negoff='"+str(negoff)+"'")
+        us.add("route_id='"+str(rid)+"'")
+        v = ', '.join( us )
+        sql = "UPDATE trips SET "+v+" WHERE trip_id='"+str(tid)+"'"
+        #print(sql)
+        db.execute(sql)
+
     elif can == True:
-        val = [tid,PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate]
-        dbi('cancel', 'trip_id,PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate', val)
+        val = [PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate]
+        dbi('cancel', 'PAID,PAv,TRID,TRv,year,company,cdate,sdate,edate,hexmap,bitmap,filepath,filename,ldate', val)
         db.execute("UPDATE trips SET service_id = -abs(service_id) WHERE PAID = '"+PAID+"' ")
+
+def ofs(tm, negoff):
+    #print(tm, negoff)
+    t = tm.find('Time').text[:8]
+    o = tm.find('Offset').text
+    if negoff == 0 and o == '0':
+        return t
+    return str(int(t[:2])+( (abs(negoff)+int(o))*24))+t[2:]   
+
+def grid(company,rsn,rln):
+    db.execute("INSERT OR IGNORE INTO routes (agency_id,route_short_name,route_long_name) VALUES('"+company+"','"+rsn+"','"+rln+"')")
+    return db.execute("SELECT route_id FROM routes WHERE agency_id='"+company+"' AND route_short_name='"+rsn+"' AND route_long_name='"+rln+"' ").fetchone()[0]
+  
+def dbi(table, name, val, oi=''):
+    #print(val)
+    v = "'"+("','".join( map(str, val) ))+"'"
+    v = v.replace("'None'","NULL")
+    sql = "INSERT "+ oi +" INTO "+table+" ("+name+") VALUES("+v+")"
+    #print(sql)
+    return db.execute(sql)
+
+diso = {'CZ': '54', 'SK': '56', 'PL': '51', 'DE': '80', 'AT': '81'}
+    
+def gctt(s):
+    global dtt
+    if dtt == None:
+        dtt = {'11':'Os', 'C1':'Ex', 'C2':'R', 'C3':'Sp'}
+        fp = '../res/SeznamKomercniDruhVlaku.xml'
+        if os.path.exists(fp):
+            for e in ET.parse(fp).getroot().findall('.//{http://provoz.szdc.cz/kadr}KomercniDruhVlaku'):
+                #print(e.attrib)
+                dtt[ e.attrib['KodTAF'] ] = e.attrib['Kod']
+    if s in dtt:
+        return dtt[s]
+    else:
+        return s
 
 def getcal(m):
     global cal
@@ -227,18 +258,19 @@ def getcal(m):
         return r
 
 def calcal():
-    sql = "SELECT id,trip_id,PAID,service_id,hexmap,sdate,edate,cdate,negoff FROM trips WHERE service_id < 0 OR service_id IS NULL ORDER BY cdate ASC"
+    ldate = datetime.datetime.now().isoformat('T', 'seconds')
+    sql = "SELECT trip_id,PAID,service_id,hexmap,sdate,edate,cdate,negoff FROM trips WHERE service_id < 0 OR service_id IS NULL"
     #print(sql)
     cur = db.execute(sql)
     for row in cur:
         print('cc', row[1])
-        sid = row[3]
+        sid = row[2]
         if sid == None:
-            sid = getcal( int( row[4], 0 ) )
-            dbi('jr_zmeny','trip_id,typ,calid,sdate,edate,ldate,cisdate',[ row[1], 'a', sid, row[5], row[6], datetime.datetime.now().isoformat(), row[7] ], oi='OR IGNORE')
-        sql2 = "SELECT trip_id,PAID,'e',sdate,edate,cdate,hexmap FROM trips WHERE RPAID = '"+row[2]+"' UNION ALL SELECT trip_id,PAID,'c',sdate,edate,cdate,hexmap FROM cancel WHERE PAID = '"+row[2]+"' ORDER BY cdate ASC"
+            sid = getcal( int( row[3], 0 ) )
+            dbi('jr_zmeny','trip_id,typ,calid,sdate,edate,ldate,cisdate',[ row[0], 'a', sid, row[4], row[5], ldate, row[6] ], oi='OR IGNORE')
+        sql2 = "SELECT trip_id,PAID,'e',sdate,edate,cdate,hexmap FROM trips WHERE RPAID = '"+row[1]+"' UNION ALL SELECT trip_id,PAID,'c',sdate,edate,cdate,hexmap FROM cancel WHERE PAID = '"+row[1]+"' ORDER BY cdate ASC"
         c2 = db.execute(sql2)
-        bm = int(row[4], 0)
+        bm = int(row[3], 0)
         for r2 in c2:
             print('cc\t',r2[0], r2[2])
             a = int( r2[6], 0)
@@ -246,23 +278,19 @@ def calcal():
             nsid = getcal(bm)
             if sid != nsid:
                 print('cc\t', sid, ' > ', nsid)
-                dbi('jr_zmeny','trip_id, from_id, typ, ocalid, calid, sdate, edate, ldate, cisdate',[ row[1], r2[0], r2[2],sid, nsid, r2[3], r2[4],datetime.datetime.now().isoformat(), r2[5] ], oi='OR IGNORE')
+                dbi('jr_zmeny','trip_id, from_id, typ, ocalid, calid, sdate, edate, ldate, cisdate',[ row[1], r2[0], r2[2],sid, nsid, r2[3], r2[4],ldate, r2[5] ], oi='OR IGNORE')
                 sid = nsid
-        if row[3] == None or abs(row[3]) != sid:
+        if row[2] == None or abs(row[2]) != sid:
             gsid = sid
-            if row[8] != 0:
-                gsid = getcal( bm << abs(row[8]) )
-            sql = "UPDATE trips SET service_id = '"+str(gsid)+"', gvdcal = '"+str(sid)+"' WHERE id = '"+str(row[0])+"'"
+            if row[7] != 0:
+                gsid = getcal( bm << abs(row[7]) )
+            sql = "UPDATE trips SET service_id = '"+str(gsid)+"', gvdcal = '"+str(sid)+"' WHERE trip_id = '"+str(row[0])+"'"
             #print(sql)
             db.execute(sql)
     db.commit()
     
 def hex2gtfs():
     print('hex2gtfs')
-    sql = "CREATE TABLE IF NOT EXISTS calendar (service_id INTEGER,monday INTEGER,tuesday INTEGER,wednesday INTEGER,thursday INTEGER,friday INTEGER,saturday INTEGER,sunday INTEGER,start_date INTEGER,end_date INTEGER)"
-    db.execute(sql)
-    sql = "CREATE TABLE IF NOT EXISTS calendar_dates(service_id INTEGER,date INTEGER,exception_type INTEGER)"
-    db.execute(sql)
     sql = "SELECT * FROM gvdcal WHERE id NOT IN(SELECT service_id FROM calendar)"
     cur = setup.db.execute(sql)
     for row in cur:
@@ -319,94 +347,42 @@ def hex2gtfs():
         #print( bin(m) )
     db.commit()
 
-def pp_route():    
-    db.execute("CREATE TABLE IF NOT EXISTS routes(route_id,agency_id,route_short_name,route_long_name,route_type DEFAULT '2')")
-    routes = None
-    ids = set()
-    sql = "SELECT company,tsn,tln,psn,otns,trip_id FROM trips WHERE route_id IS NULL"
+def dup():
+    tt = time.time()
+    print('dup')
+    sql = "SELECT PAID FROM trips WHERE service_id != 0 OR service_id IS NULL GROUP BY PAID,PAv HAVING count(*) > 1"
+    sql = "SELECT trip_id,PAID,PAv,mtime FROM trips WHERE PAID IN("+sql+") ORDER BY PAID, mtime DESC"
+    #print(sql)
+    s = set()
     cur = db.execute(sql)
     for row in cur:
-        if routes == None:
-            routes = {} # maska, id
-            c2 = db.execute("SELECT route_id,agency_id,route_short_name,route_long_name FROM routes")
-            for r2 in c2:
-                #print(r2)
-                routes[ '#'.join(r2[1:]) ] = r2[0]
-                ids.add(r2[0])
+        print(row)
+        k = row[1]+'_'+row[2]
+        if k not in s:
+            s.add(k)
+        else:
+            db.execute("UPDATE trips SET service_id='0' WHERE trip_id = '"+str(row[0])+"'")
+    print('s:::',s)
+    db.commit()
+    print("cas", (time.time()-tt))
 
-        m2 = '#'.join(row[:3])
-        print(m2)
-        if m2 not in routes:
-            ks = row[4]
-            id = ord('A')
-            while ks in ids:
-                ks = row[4]+'-'+chr(id)
-                print(ks)
-                id += 1
-            dbi('routes',"route_id,agency_id,route_short_name,route_long_name",[ks,row[0], row[1], row[2] ])
-            routes[m2] = ks
-            ids.add(ks)
-        db.execute("UPDATE trips SET route_id = '"+routes[m2]+"' WHERE trip_id = '"+row[5]+"'")
-    
 def pp():
     print('pp')
-    sql = "INSERT INTO agency (agency_id) SELECT DISTINCT company FROM trips WHERE company NOT IN(SELECT agency_id FROM agency)"
-    print(sql)
-    db.execute(sql)
-    
-    #sql = "INSERT OR IGNORE INTO stops (stop_id,stop_name) SELECT DISTINCT stop_id,stop_name FROM stop_times WHERE pickup_type != '1' AND drop_off_type != '1'"
-    #print(sql)
-    #db.execute(sql)
-    
-    sql = "SELECT stop_id,stop_name FROM stop_times WHERE stop_id NOT IN(SELECT stop_id FROM stops WHERE stop_name IS NOT NULL) AND pickup_type != 1 GROUP BY stop_id"
-    print(sql)
-    cur = setup.db.execute(sql)
-    for row in cur:
-        print(row)
-        sql = "INSERT INTO stops (stop_id, stop_name) VALUES('"+row[0]+"','"+row[1]+"') ON CONFLICT (stop_id) DO UPDATE SET stop_name = '"+row[1]+"' WHERE stop_id = '"+row[0]+"'"
-        setup.db.execute(sql)
-        
-    pp_route()
-    setup.db.commit()
+    db.execute("CREATE INDEX IF NOT EXISTS stop_times_tid_ind ON stop_times(trip_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS stop_times_sid_ind ON stop_times(stop_id)")
 
-def ofs(t, o, negoff):
-    #print(t, o)
-    if negoff == 0 and o == '0':
-        return t
-    return str(int(t[:2])+( (abs(negoff)+int(o))*24))+t[2:]
+    db.execute("CREATE INDEX IF NOT EXISTS trips_tid_ind ON trips(trip_id)")
 
-def dbi(table, name, val, oi=''):
-    #print(val)
-    v = "','".join( map(str, val) ).replace("'None'","NULL")
-    sql = "INSERT "+ oi +" INTO "+table+" ("+name+") VALUES('"+v+"')"
-    #print(sql)
-    db.execute(sql)
-    
-def gctt(s):
-    global dtt
-    if dtt == None:
-        dtt = {'11':'Os', 'C1':'Ex', 'C2':'R', 'C3':'Sp'}
-        fp = '../res/SeznamKomercniDruhVlaku.xml'
-        if os.path.exists(fp):
-            for e in ET.parse(fp).getroot().findall('.//{http://provoz.szdc.cz/kadr}KomercniDruhVlaku'):
-                #print(e.attrib)
-                dtt[ e.attrib['KodTAF'] ] = e.attrib['Kod']
-    if s in dtt:
-        return dtt[s]
-    else:
-        return s
+    db.execute("CREATE INDEX IF NOT EXISTS nspec_tid_ind ON nspec(trip_id)")
 
-if __name__ == '__main__':
-    
-    t1 = time.time()
-    
-    setup.init()
-    update()
+    dup()
+
     calcal()
     hex2gtfs()
+
+if __name__ == '__main__':
+    t1 = time.time()
+    setup.init()
+    update()
     pp()
-    
-    print('cas', time.time() - t1)
-
-
-
+    print("cas:", time.time() - t1)
