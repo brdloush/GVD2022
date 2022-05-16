@@ -39,12 +39,16 @@ def sr70():
             tn = row['Tarifní název']
             x = y = ''
             try:
-                x = wgs(row['GPS X'][1:].replace("°'","°0'"))
-                y = wgs(row['GPS Y'][1:].replace("°'","°0'"))
-                print(x, y)
+                gpsx = row['GPS X'] if row['GPS X'] != '' else 'E17°33\'26,802"'
+                gpsy = row['GPS Y'] if row['GPS Y'] != '' else 'N50°\'51,578"'
+                x = wgs(gpsx[1:].replace("°'","°0'"))
+                y = wgs(gpsy[1:].replace("°'","°0'"))
+                print(x, y, tn)
             except:
                 print('err')
             val = [ sid, tn, y, x ]
+            print("val=")
+            print(val)
             val2 = "','".join(val)
             sql = "INSERT INTO stops (stop_id,tar_nazev,stop_lat,stop_lon) VALUES('"+val2+"') ON CONFLICT (stop_id) DO UPDATE SET tar_nazev = '"+tn+"', stop_lat='"+y+"', stop_lon = '"+x+"'"
             db.execute(sql)
@@ -114,15 +118,23 @@ def sadd():
         fp = open(sa, 'r')
         c = csv.reader( fp )
         for row in c:
-            d[ row[0]] = row
+            print("type(row[0])=")
+            print(type(row[0]))
+            d[str(row[0])] = row # brdloush fix 1
+            print("row=")
+            print(row)
             if len(row[2]) > 2:
                 sql = "UPDATE stops SET stop_lat='"+row[2]+"', stop_lon='"+row[3]+"' WHERE stop_id='"+row[0]+"'"
                 print(sql)
                 db.execute(sql)
         db.commit()
         fp.close()
-    
+
+        # brdloush fix - use fake lat/lon for unknown stops
+        db.execute("update stops set stop_lat=50.0, stop_lon=14.0 where stop_id in (SELECT distinct st.stop_id FROM stop_times AS st INNER JOIN stops AS s ON st.stop_id = s.stop_id WHERE st.stop_id IN(SELECT stop_id FROM stops WHERE stop_lat IS NULL))")
+
         cur = db.execute("SELECT DISTINCT st.stop_id,stop_name FROM stop_times AS st INNER JOIN stops AS s ON st.stop_id = s.stop_id  WHERE st.stop_id IN(SELECT stop_id FROM stops WHERE stop_lat IS NULL) AND pickup_type != '1'")
+
         #for row in cur:
             #print(row)
             #a = 1
@@ -131,7 +143,7 @@ def sadd():
         e = False
         for row in cur:
             if row[0] not in d:
-                d[row[0]] = row
+                d[str(row[0])] = row
                 e = True
         
         if True == True:
