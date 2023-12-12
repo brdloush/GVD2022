@@ -5,10 +5,10 @@ import sqlite3
 import datetime
 
 gtfspath = '../gtfs/vlakyCR.zip'
-dbpath = '../GVD2023.sqlite'
-gvdpath = '../szdc/2023'
+dbpath = '../GVD2024.sqlite'
+gvdpath = '../szdc/2024'
 
-yend = datetime.datetime(2023, 12, 10).date()
+yend = datetime.datetime(2024, 12, 14).date()
 
 db = sqlite3.connect(dbpath)
 

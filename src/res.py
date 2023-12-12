@@ -111,6 +111,20 @@ def kadr(name, elem, hdr, kadr = 'kadr'):
         db.execute("INSERT INTO files (filename,size,date) VALUES('"+name+".xml','"+str(fi.st_size)+"','"+str(fi.st_ctime)+"')")
         db.commit()
 
+def agency_add():
+    d = {}
+    sa = '../res/agency_add.csv'
+    if os.path.exists(sa) and filech(sa):
+        fp = open(sa, 'r')
+        c = csv.reader( fp )
+        for row in c:
+            agid = row[0]
+            sql = "UPDATE agency set agency_name = '"+row[1]+"', agency_short_name = '"+row[2]+"', agency_url = '"+row[3]+"' where agency_id='"+row[0]+"'"
+            print(sql)
+            db.execute(sql)
+        db.commit()
+
+
 def sadd():
     d = {}
     sa = '../res/stop_add.csv'
@@ -161,6 +175,7 @@ def sadd():
         print(e)
 
 ag()
+agency_add()
 sr70()
 sadd()
 db.commit()
